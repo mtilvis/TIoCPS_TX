@@ -48,8 +48,8 @@ static struct S_hs_adv
 	uint8_t bark;
 	uint16_t uid_h;
 	uint8_t spare;
-} hs_adv = {.hs_UUID = {0x95, 0x84, 0x58, 0x55, 0xE9, 0x37, 0x37, 0xE2, 0xCC, 0xAB, 0x91, 0x68, 0x36, 0xCE, 0x17, 0x96}, .uid_l = 0x4182,
-  .lat_h = 0x50, .lat_lon = 0, .lon_h = 0x50, .flags = 0xfc, .cnt = 1, .dir_speed = 0, .uid_h = 0, .bark_lm = 0, .bark = 0, .spare = 0x5A}; 
+} hs_adv = {.hs_UUID = {0x95, 0x84, 0x58, 0x55, 0xE9, 0x37, 0x37, 0xE2, 0xCC, 0xAB, 0x91, 0x68, 0x36, 0xCE, 0x17, 0x96}, 
+  .lat_h = 0x50, .lat_lon = 0, .lon_h = 0x50, .flags = 0xfc, .cnt = 1, .dir_speed = 0, .bark_lm = 2, .bark = 0x31, .spare = 0x5A}; 
 
 static struct bt_data ad[] = {
     BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
@@ -127,7 +127,6 @@ void main(void)
 	static uint8_t tama, dirspeed;
 	static uint32_t L = 1, R = 2;
 	static BLOWFISH_CTX ctx;
-	static uint32_t random_uid = 0x01020304;
 	// static uint8_t key[] = "TESTKEY";
 	
 	// Initialize the Bluetooth Subsystem
@@ -139,17 +138,16 @@ void main(void)
 
 	bt_ready();
 
-	// Generate random UID
-	random_uid = sys_rand32_get();
-	hs_adv.uid_h = (uint16_t)(random_uid >> 16);
-	hs_adv.uid_l = (uint16_t)(random_uid & 0x0000ffff);
-	printk("%lX %X %X : ", (long unsigned int)random_uid, hs_adv.uid_h, hs_adv.uid_l);
+	// Generate random UID 		NOTE! sys_rand_get seems to produce only 16 random numbers at nrF5340
+	hs_adv.uid_h = (uint16_t)sys_rand32_get();	
+	hs_adv.uid_l = (uint16_t)sys_rand32_get();
+	printk("UID : %X %X : ", hs_adv.uid_h, hs_adv.uid_l);
 
 	k_sleep(K_MSEC(600));	// Just to wait for BLE ad info to print
 	// Blowfish encryption/decryption test
    	Blowfish_Init(&ctx, blowfish_key, 7);
  	Blowfish_Encrypt(&ctx, &L, &R);
- 	printk("%lX %lX\n", (long unsigned int)L, (long unsigned int)R);
+ 	// printk("%lX %lX\n", (long unsigned int)L, (long unsigned int)R);
 #ifdef TEST_ENCRYPTION
   	if (L == 0xA0A51EF2L && R == 0x35AE0591L)
 	{
@@ -197,17 +195,13 @@ void main(void)
 		hs_adv.dir_speed = dirspeed;
 		// printk("%0X %0X : %0X\n", reittipiste, reittipisteindex, dirspeed);
 
-		hs_adv.bark_lm = 2;
-		hs_adv.bark = 0x31;
-		hs_adv.spare = 0x5A;
-
 #ifdef HS_ENCRYPTION
 		// Rearrenge data for encryption	ToDo! Make function that can use pointer directly for encryption
 		L = (hs_adv.flags<<24) + (hs_adv.cnt<<16) + (hs_adv.dir_speed<<8) + hs_adv.bark_lm;
 		R = (hs_adv.bark<<24) + (hs_adv.uid_h<<8) + hs_adv.spare;
-	 	// printk("%0lX %0lX\n", (long unsigned int)L, (long unsigned int)R);
+	 	printk("%0lX %0lX : ", (long unsigned int)L, (long unsigned int)R);
 		Blowfish_Encrypt(&ctx, &L, &R);
-	 	// printk("%0lX %0lX\n", (long unsigned int)L, (long unsigned int)R);
+	 	printk("%0lX %0lX\n", (long unsigned int)L, (long unsigned int)R);
 		// Rearrange  data from the encryption
 		hs_adv.flags = (uint8_t)(L>>24);
 		hs_adv.cnt = (uint8_t)(L>>16);

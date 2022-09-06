@@ -1,9 +1,10 @@
-/* main.c - Application main entry point */
-
 /*
- * Copyright (c) 2015-2016 Intel Corporation
+ * Copyright (c) Polr Electro Oy / Marko Tilvis
  *
- * SPDX-License-Identifier: Apache-2.0
+ * Hunting scenario BLE Coded PHY transmitter for TIoCPS demonstrator
+ * Transmits BLE Coded PHY message with 128 bit UUID. Part of the payload
+ * is decrypted using BlowFish hash algorithm.
+ * There is build in emulator for location using values from lenkki.h and transmitting location.
  */
 
 #include <zephyr/types.h>
@@ -24,7 +25,7 @@
 #include <bluetooth/gatt.h>
 #include <bluetooth/gatt_dm.h>
 
-#include "lenkki.h"
+#include "lenkki2.h"
 #include "GNSS_compute.h"
 #include "blowfish.h"
 
@@ -34,10 +35,12 @@ static struct k_work start_advertising_worker;
 
 static struct bt_le_ext_adv *adv;
 
+// Define data structure and defaults for advertising
 static struct S_hs_adv
 {
 	uint8_t hs_UUID[16];
-	uint16_t uid_l;
+	uint8_t uid_1;
+	uint8_t uid_0;
 	uint8_t lat_h;
 	uint8_t lat_lon;
 	uint8_t lon_h;
@@ -46,11 +49,13 @@ static struct S_hs_adv
 	uint8_t dir_speed;
 	uint8_t bark_lm;
 	uint8_t bark;
-	uint16_t uid_h;
+	uint8_t uid_3;
+	uint8_t uid_2;
 	uint8_t spare;
 } hs_adv = {.hs_UUID = {0x95, 0x84, 0x58, 0x55, 0xE9, 0x37, 0x37, 0xE2, 0xCC, 0xAB, 0x91, 0x68, 0x36, 0xCE, 0x17, 0x96}, 
   .lat_h = 0x50, .lat_lon = 0, .lon_h = 0x50, .flags = 0xfc, .cnt = 1, .dir_speed = 0, .bark_lm = 2, .bark = 0x31, .spare = 0x5A}; 
 
+// Define advertising message
 static struct bt_data ad[] = {
     BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
     BT_DATA(BT_DATA_SVC_DATA128, &hs_adv, 29),
@@ -125,6 +130,7 @@ void main(void)
   	static float lat, lon;
 	static int32_t temp_lon, temp_lat;
 	static uint8_t tama, dirspeed;
+	static uint16_t uid_h;
 	static uint32_t L = 1, R = 2;
 	static BLOWFISH_CTX ctx;
 	// static uint8_t key[] = "TESTKEY";
@@ -138,10 +144,16 @@ void main(void)
 
 	bt_ready();
 
-	// Generate random UID 		NOTE! sys_rand_get seems to produce only 16 random numbers at nrF5340
-	hs_adv.uid_h = (uint16_t)sys_rand32_get();	
-	hs_adv.uid_l = (uint16_t)sys_rand32_get();
-	printk("UID : %X %X : ", hs_adv.uid_h, hs_adv.uid_l);
+	// Generate random UID 		NOTE! sys_rand_get seems to produce only 16 bit random numbers at nrF5340
+	uid_h = sys_rand32_get();	
+	hs_adv.uid_1 = (uint8_t)(uid_h >> 8);
+	hs_adv.uid_0 = (uint8_t)uid_h;
+	uid_h = sys_rand32_get();	
+	hs_adv.uid_3 = (uint8_t)(uid_h >> 8);
+	hs_adv.uid_2 = (uint8_t)uid_h;
+
+	printk("UID : %02X%02X%02X%02X: \n", hs_adv.uid_3, hs_adv.uid_2, hs_adv.uid_1, hs_adv.uid_0);
+	printk("UID : %X: \n", uid_h);
 
 	k_sleep(K_MSEC(600));	// Just to wait for BLE ad info to print
 	// Blowfish encryption/decryption test
@@ -194,11 +206,15 @@ void main(void)
 		dirspeed = dirspeed + (uint8_t)reitti[reittipiste][reittipisteindex*4+2];
 		hs_adv.dir_speed = dirspeed;
 		// printk("%0X %0X : %0X\n", reittipiste, reittipisteindex, dirspeed);
+		// high part of UID, NOTE! Encryption changes data, so it needs refreshing
+		hs_adv.uid_3 = (uint8_t)(uid_h >> 8);
+		hs_adv.uid_2 = (uint8_t)uid_h;
+
 
 #ifdef HS_ENCRYPTION
 		// Rearrenge data for encryption	ToDo! Make function that can use pointer directly for encryption
 		L = (hs_adv.flags<<24) + (hs_adv.cnt<<16) + (hs_adv.dir_speed<<8) + hs_adv.bark_lm;
-		R = (hs_adv.bark<<24) + (hs_adv.uid_h<<8) + hs_adv.spare;
+		R = (hs_adv.bark<<24) + (hs_adv.uid_3<<16) + (hs_adv.uid_2<<8) + hs_adv.spare;
 	 	printk("%0lX %0lX : ", (long unsigned int)L, (long unsigned int)R);
 		Blowfish_Encrypt(&ctx, &L, &R);
 	 	printk("%0lX %0lX\n", (long unsigned int)L, (long unsigned int)R);
@@ -208,13 +224,15 @@ void main(void)
 		hs_adv.dir_speed = (uint8_t)(L>>8); 
 		hs_adv.bark_lm = (uint8_t)L;
 		hs_adv.bark = (uint8_t)(R>>24);
-		hs_adv.uid_h = (uint16_t)(R>>8);
+		hs_adv.uid_3 = (uint8_t)(R>>16);
+		hs_adv.uid_2 = (uint8_t)(R>>8);
 		hs_adv.spare = (uint8_t)R;
 	 	// printk("%02X%02X%02X%02X ", hs_adv.flags, hs_adv.cnt, hs_adv.dir_speed, hs_adv.bark_lm);
 	 	// printk("%02X%04X%02X rec\n", hs_adv.bark, hs_adv.uid_h, hs_adv.spare);
 #endif
 
 		bt_le_ext_adv_set_data(adv, ad, ARRAY_SIZE(ad), NULL, 0);
+
 
 	    if (reittipisteindex++ > 2)
 		{
